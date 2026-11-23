@@ -50,6 +50,12 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warm);outline-o
 .list li{display:flex;justify-content:space-between;padding:8px 0;border-top:1px solid var(--line)}
 .list button{border:0;background:none;color:var(--sub);cursor:pointer;font:inherit}
 .hyp{width:100%;height:auto;display:block}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.tile{border:1px solid var(--line);border-radius:12px;padding:10px 12px}
+.tile b{display:block;font-size:1.15rem;line-height:1.4}
+.tile span{font-size:.78rem;color:var(--sub)}
+.stack{display:flex;height:18px;border-radius:9px;overflow:hidden;margin-bottom:8px}
+.sh{font-size:.9rem;margin:18px 0 8px;font-weight:700}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:.8rem;color:var(--sub);margin-top:10px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;vertical-align:-1px}
 @media (prefers-reduced-motion:no-preference){.ring circle.v{transition:stroke-dashoffset .8s ease}}
@@ -99,6 +105,16 @@ button:focus-visible,input:focus-visible{outline:3px solid var(--warm);outline-o
   <div class="bars" id="bars"></div>
   <div class="days" id="days"></div>
   <p class="sub" id="avg" style="margin:10px 0 0"></p>
+</section>
+
+<section>
+  <h2>睡眠の統計</h2>
+  <div class="q" id="per" style="margin-top:0">
+    <button type="button" data-p="7" aria-pressed="true">7日</button>
+    <button type="button" data-p="30" aria-pressed="false">30日</button>
+    <button type="button" data-p="0" aria-pressed="false">全期間</button>
+  </div>
+  <div id="stats"></div>
 </section>
 
 <section>
@@ -183,7 +199,7 @@ function render(){
     days.insertAdjacentHTML("beforeend",`<span>${d.getMonth()+1}/${d.getDate()}</span>`);
   }
   $("avg").textContent=n?"7日間の平均は"+fmt(Math.round(sum/n))+"です(破線が目標)。":"記録すると平均が表示されます。";
-  hyp();
+  hyp();stats();
   $("list").innerHTML=st.logs.slice(0,14).map(l=>`<li><span>${l.date.slice(5)}  ${l.bed}→${l.wake}(${fmt(l.d)}・${QL[l.q-1]})</span><button data-d="${l.date}" aria-label="${l.date}の記録を削除">削除</button></li>`).join("")||'<li class="sub">まだありません</li>';
 }
 let M=null;
@@ -222,6 +238,42 @@ $("meas").onclick=async()=>{
   $("meas").textContent="計測を終了して保存";
   M.timer=setInterval(tick,1000);tick();
 };
+let per=7;
+$("per").addEventListener("click",e=>{const b=e.target.closest("button");if(!b)return;per=+b.dataset.p;[...$("per").children].forEach(x=>x.setAttribute("aria-pressed",x===b));stats()});
+function stats(){
+  const el=$("stats");
+  let L=st.logs;
+  if(per>0){const c=new Date();c.setDate(c.getDate()-per+1);const cs=ds(c);L=L.filter(l=>l.date>=cs)}
+  if(!L.length){el.innerHTML='<p class="sub">この期間の記録がありません。</p>';return}
+  const n=L.length,avg=a=>a.reduce((x,y)=>x+y,0)/a.length,g=st.goal*60;
+  const D=L.map(l=>l.d);
+  const bm=L.map(l=>{const m=mins(l.bed);return m<720?m+1440:m});
+  const bavg=avg(bm),sd=Math.sqrt(avg(bm.map(x=>(x-bavg)**2)));
+  const debt=D.reduce((s,d)=>s+Math.max(0,g-d),0);
+  const ok=D.filter(d=>d>=g).length;
+  const T=[
+    [fmt(Math.round(avg(D))),"平均睡眠時間"],
+    [Math.round(ok/n*100)+"%","目標達成率("+ok+"/"+n+"日)"],
+    [hm(Math.round(bavg)),"平均就寝時刻"],
+    [hm(Math.round(avg(L.map(l=>mins(l.wake))))),"平均起床時刻"],
+    ["±"+Math.round(sd)+"分","就寝時刻のばらつき"],
+    [fmt(Math.round(debt)),"睡眠負債(不足の合計)"],
+    [avg(L.map(l=>l.q)).toFixed(1)+" / 5","目覚めの質(平均)"],
+    [fmt(Math.max(...D))+" / "+fmt(Math.min(...D)),"最長 / 最短"]
+  ];
+  let h='<div class="tiles">'+T.map(t=>`<div class="tile"><b>${t[0]}</b><span>${t[1]}</span></div>`).join("")+'</div>';
+  const MS=L.filter(l=>l.ep);
+  if(MS.length){
+    const t=[0,0,0,0];MS.forEach(l=>segFromEp(l.ep).forEach(s=>t[s[0]]+=s[1]));
+    const sl=(t[1]+t[2]+t[3])||1,cols=["var(--warm)","#d46a9a","var(--bar)","var(--accent)"],nm=["覚醒","レム","浅い","深い"];
+    h+=`<div class="sh">ステージの内訳(計測${MS.length}日分・推定)</div><div class="stack">`+[3,1,2].map(i=>`<div style="width:${t[i]/sl*100}%;background:${cols[i]}"></div>`).join("")+`</div><div class="legend">`+[3,1,2].map(i=>`<span><i style="background:${cols[i]}"></i>${nm[i]} ${Math.round(t[i]/sl*100)}%</span>`).join("")+`<span><i style="background:${cols[0]}"></i>覚醒 1晩平均${fmt(Math.round(t[0]/MS.length))}</span></div>`;
+  }
+  const wd=[[],[],[],[],[],[],[]];
+  L.forEach(l=>wd[new Date(l.date+"T00:00:00").getDay()].push(l.d));
+  const bars=wd.map(a=>{const v=a.length?avg(a):0;return `<div class="b${v>=g?" ok":""}" style="height:${Math.min(100,v/600*100)}%" title="${a.length?fmt(Math.round(v)):"記録なし"}"></div>`}).join("");
+  h+=`<div class="sh">曜日別の平均睡眠時間</div><div class="bars"><div class="g" style="bottom:${Math.min(100,g/600*100)}%"></div>${bars}</div><div class="days">`+["日","月","火","水","木","金","土"].map(x=>`<span>${x}</span>`).join("")+`</div>`;
+  el.innerHTML=h;
+}
 function stageAt(m){const k=Math.floor(m/90),r=m%90,dp=Math.max(0,34-9*k),rem=Math.min(40,8+9*k),li=90-dp-rem;return r<li*.4?2:r<li*.4+dp?3:r<li?2:1}
 function modelSeg(total){
   const seg=[];let t=0;
